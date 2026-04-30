@@ -2014,31 +2014,49 @@ class SQLiteHandler:
             return []
 
     def upsert_client_sync(self, room_hash: str, client_pubkey: str, **kwargs) -> bool:
-        """Insert or update client sync state using single upsert operation."""
+        """Insert or update client sync state using single upsert operation.
+
+        On INSERT (new row) all columns receive sensible defaults.
+        On UPDATE only the columns explicitly passed in **kwargs are changed —
+        other columns (push_failures, pending_ack_crc, …) are left untouched.
+
+        Previously this used INSERT OR REPLACE which is not a true upsert: SQLite
+        deletes the conflicting row and inserts a fresh one, silently resetting
+        every column that was not supplied.  For example, calling
+        upsert_client_sync(sync_since=X) after a client posted a message would
+        reset push_failures back to 0, defeating the push-failure circuit breaker.
+        """
         try:
             with self._connect() as conn:
                 now = time.time()
                 kwargs["updated_at"] = now
-
-                # Set defaults for insert path
-                kwargs.setdefault("sync_since", 0)
-                kwargs.setdefault("pending_ack_crc", 0)
-                kwargs.setdefault("push_post_timestamp", 0)
-                kwargs.setdefault("ack_timeout_time", 0)
-                kwargs.setdefault("push_failures", 0)
                 kwargs.setdefault("last_activity", now)
 
-                columns = ["room_hash", "client_pubkey"] + list(kwargs.keys())
-                placeholders = ["?"] * len(columns)
-                values = [room_hash, client_pubkey] + list(kwargs.values())
+                # Full column set for the INSERT branch (new rows get safe defaults)
+                insert_defaults = {
+                    "sync_since": 0,
+                    "pending_ack_crc": 0,
+                    "push_post_timestamp": 0,
+                    "ack_timeout_time": 0,
+                    "push_failures": 0,
+                    **kwargs,  # caller-supplied values override defaults
+                }
 
-                # Use INSERT OR REPLACE for single atomic upsert
+                all_columns = ["room_hash", "client_pubkey"] + list(insert_defaults.keys())
+                all_values = [room_hash, client_pubkey] + list(insert_defaults.values())
+
+                # ON UPDATE: only touch the columns the caller explicitly passed
+                # (plus updated_at which is always refreshed).
+                update_cols = list(kwargs.keys())
+                update_set = ", ".join(f"{col}=excluded.{col}" for col in update_cols)
+
                 conn.execute(
                     f"""
-                    INSERT OR REPLACE INTO room_client_sync ({', '.join(columns)})
-                    VALUES ({', '.join(placeholders)})
-                """,
-                    values,
+                    INSERT INTO room_client_sync ({', '.join(all_columns)})
+                    VALUES ({', '.join(['?'] * len(all_columns))})
+                    ON CONFLICT(room_hash, client_pubkey) DO UPDATE SET {update_set}
+                    """,
+                    all_values,
                 )
                 conn.commit()
                 return True
