@@ -5032,6 +5032,34 @@ class APIEndpoints:
 
     @cherrypy.expose
     @cherrypy.tools.json_out()
+    def resolve_pubkey_names(self, pubkeys: str = ""):
+        """Resolve a list of pubkeys to display names.
+
+        GET /api/resolve_pubkey_names?pubkeys=aaa...,bbb...
+
+        Returns:
+            {"success": true, "data": {"aaa...": "Alice", "bbb...": null, ...}}
+        """
+        self._set_cors_headers()
+        if cherrypy.request.method == "OPTIONS":
+            return {}
+        try:
+            pubkey_list = [p.strip() for p in pubkeys.split(",") if p.strip()]
+            if not pubkey_list:
+                return self._success({})
+            storage = self._get_storage()
+            result = {}
+            for pk in pubkey_list:
+                name = storage.get_node_name_by_pubkey(pk) if storage else None
+                if not name:
+                    name = self._get_companion_name_by_pubkey(pk)
+                result[pk] = name
+            return self._success(result)
+        except Exception as e:
+            return self._error(str(e))
+
+    @cherrypy.expose
+    @cherrypy.tools.json_out()
     def pubkey_aliases(self):
         """List all admin-assigned pubkey aliases.
 
