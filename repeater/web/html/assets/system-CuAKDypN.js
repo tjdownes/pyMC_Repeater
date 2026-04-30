@@ -1,0 +1,1 @@
+import{t as e}from"./system-BG1i1YSZ.js";export{e as useSystemStore};
