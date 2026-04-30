@@ -4059,10 +4059,19 @@ class APIEndpoints:
 
                 formatted_messages.append(formatted_msg)
 
+            # Include the room server's own public key so the UI can identify
+            # which messages were sent from this server (right-hand side in chat).
+            room_server_obj = room_info.get("room_server")
+            try:
+                room_pubkey = room_server_obj.local_identity.get_public_key().hex() if room_server_obj else None
+            except Exception:
+                room_pubkey = None
+
             return self._success(
                 {
                     "room_name": room_info["name"],
                     "room_hash": room_hash_str,
+                    "room_pubkey": room_pubkey,
                     "messages": formatted_messages,
                     "count": len(formatted_messages),
                     "total": total_count,
