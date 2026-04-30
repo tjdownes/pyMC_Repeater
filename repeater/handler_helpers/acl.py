@@ -106,11 +106,33 @@ class ACL:
             if client is None:
                 if self.allow_read_only:
                     logger.info("Blank password, allowing read-only guest access")
+                    # Create and store a ClientInfo so the room server can push messages
+                    # to this client and decrypt their incoming messages.  Without this
+                    # entry the sync loop never sees the client and the shared secret is
+                    # never stored, so no communication is possible even though login
+                    # succeeded.
+                    if len(self.clients) >= self.max_clients:
+                        logger.warning("ACL full, cannot add blank-password client")
+                        return False, 0
+                    client = ClientInfo(client_identity, PERM_ACL_GUEST)
+                    client.shared_secret = shared_secret
+                    client.last_timestamp = timestamp
+                    client.last_activity = int(time.time())
+                    client.last_login_success = int(time.time())
+                    if sync_since is not None:
+                        client.sync_since = sync_since
+                    self.clients[pub_key] = client
+                    logger.info(f"Added blank-password guest client {pub_key[:6].hex()}...")
                     return True, PERM_ACL_GUEST
                 else:
                     logger.info("Blank password, sender not in ACL and read-only disabled")
                     return False, 0
+            # Client already in ACL — update shared secret and activity for this session
             logger.info(f"ACL-based login for {pub_key[:6].hex()}...")
+            client.shared_secret = shared_secret
+            client.last_activity = int(time.time())
+            if sync_since is not None:
+                client.sync_since = sync_since
             return True, client.permissions
 
         permissions = 0
