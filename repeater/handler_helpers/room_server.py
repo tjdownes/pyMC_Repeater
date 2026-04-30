@@ -231,6 +231,12 @@ class RoomServer:
     ) -> bool:
 
         try:
+            # Strip leading/trailing whitespace (including newlines from web textarea)
+            message_text = message_text.strip()
+            if not message_text:
+                logger.warning(f"Room '{self.room_name}': Dropping empty message after strip")
+                return False
+
             # SAFETY: Validate message length
             if len(message_text) > MAX_MESSAGE_LENGTH:
                 logger.warning(
