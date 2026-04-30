@@ -233,6 +233,27 @@ class APIEndpoints:
 
         return self.daemon_instance.repeater_handler.storage
 
+    def _get_companion_name_by_pubkey(self, pubkey_hex: str) -> Optional[str]:
+        """Resolve a companion's display name from their login pubkey.
+
+        Companions authenticate to room servers using a dedicated ED25519 key
+        derived from their ``identity_key`` seed.  This key differs from the
+        LoRa/firmware advert key, so it never appears in the adverts table.
+        We derive each configured companion's public key and compare it against
+        the author pubkey to find a matching name.
+        """
+        if not pubkey_hex:
+            return None
+        identities_config = self.config.get("identities", {})
+        companions = identities_config.get("companions") or []
+        pubkey_lower = pubkey_hex.lower()
+        for comp in companions:
+            derived_pk = derive_companion_public_key_hex(comp.get("identity_key"))
+            if derived_pk and derived_pk.lower() == pubkey_lower:
+                name = comp.get("name")
+                return name if name else None
+        return None
+
     def _success(self, data, **kwargs):
         result = {"success": True, "data": data}
         result.update(kwargs)
@@ -4051,9 +4072,12 @@ class APIEndpoints:
                     "created_at": msg.get("created_at", msg["post_timestamp"]),
                 }
 
-                # Lookup sender name from adverts table
+                # Lookup sender name: first try adverts (LoRa nodes), then
+                # companion config (companion login keys are not in adverts).
                 if author_pubkey:
                     author_name = storage.get_node_name_by_pubkey(author_pubkey)
+                    if not author_name:
+                        author_name = self._get_companion_name_by_pubkey(author_pubkey)
                     if author_name:
                         formatted_msg["author_name"] = author_name
 
