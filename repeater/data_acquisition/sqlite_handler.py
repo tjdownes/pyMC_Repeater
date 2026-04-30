@@ -246,6 +246,18 @@ class SQLiteHandler:
                     "CREATE INDEX IF NOT EXISTS idx_room_client_sync_pending ON room_client_sync(pending_ack_crc)"
                 )
 
+                # Pubkey aliases — admin-assigned names for clients not in adverts
+                conn.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS pubkey_aliases (
+                        pubkey TEXT NOT NULL PRIMARY KEY,
+                        alias TEXT NOT NULL,
+                        created_at REAL NOT NULL,
+                        updated_at REAL NOT NULL
+                    )
+                """
+                )
+
                 conn.commit()
                 logger.info(f"SQLite database initialized: {self.sqlite_path}")
 
@@ -681,6 +693,30 @@ class SQLiteHandler:
                         (migration_name, time.time()),
                     )
                     logger.info(f"Migration '{migration_name}' applied successfully")
+
+                # Migration 12: Create pubkey_aliases table for admin-assigned client names
+                migration_name = "add_pubkey_aliases_table"
+                existing = conn.execute(
+                    "SELECT migration_name FROM migrations WHERE migration_name = ?",
+                    (migration_name,),
+                ).fetchone()
+
+                if not existing:
+                    conn.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS pubkey_aliases (
+                            pubkey TEXT NOT NULL PRIMARY KEY,
+                            alias TEXT NOT NULL,
+                            created_at REAL NOT NULL,
+                            updated_at REAL NOT NULL
+                        )
+                        """
+                    )
+                    conn.execute(
+                        "INSERT INTO migrations (migration_name, applied_at) VALUES (?, ?)",
+                        (migration_name, time.time()),
+                    )
+                    logger.info("Migration 12: Created pubkey_aliases table")
 
                 conn.commit()
 
@@ -2699,3 +2735,75 @@ class SQLiteHandler:
         except Exception as e:
             logger.error(f"Failed to pop companion message: {e}")
             return None
+
+    # -----------------------------------------------------------------------
+    # Pubkey alias management
+    # -----------------------------------------------------------------------
+
+    def set_pubkey_alias(self, pubkey: str, alias: str) -> bool:
+        """Create or update a human-readable alias for a public key.
+
+        Args:
+            pubkey: Full hex public key string (64 chars / 32 bytes).
+            alias: Display name to associate with this pubkey.
+
+        Returns:
+            True on success.
+        """
+        try:
+            now = time.time()
+            with self._connect() as conn:
+                conn.execute(
+                    """
+                    INSERT INTO pubkey_aliases (pubkey, alias, created_at, updated_at)
+                    VALUES (?, ?, ?, ?)
+                    ON CONFLICT(pubkey) DO UPDATE SET alias = excluded.alias,
+                                                      updated_at = excluded.updated_at
+                    """,
+                    (pubkey.lower(), alias.strip(), now, now),
+                )
+                conn.commit()
+            return True
+        except Exception as e:
+            logger.error(f"Failed to set pubkey alias: {e}")
+            return False
+
+    def get_pubkey_alias(self, pubkey: str) -> Optional[str]:
+        """Return the alias for a pubkey, or None if not set."""
+        try:
+            with self._connect() as conn:
+                row = conn.execute(
+                    "SELECT alias FROM pubkey_aliases WHERE pubkey = ?",
+                    (pubkey.lower(),),
+                ).fetchone()
+                return row[0] if row else None
+        except Exception as e:
+            logger.debug(f"Failed to get pubkey alias: {e}")
+            return None
+
+    def delete_pubkey_alias(self, pubkey: str) -> bool:
+        """Remove the alias for a pubkey. Returns True if a row was deleted."""
+        try:
+            with self._connect() as conn:
+                cursor = conn.execute(
+                    "DELETE FROM pubkey_aliases WHERE pubkey = ?",
+                    (pubkey.lower(),),
+                )
+                conn.commit()
+                return cursor.rowcount > 0
+        except Exception as e:
+            logger.error(f"Failed to delete pubkey alias: {e}")
+            return False
+
+    def get_all_pubkey_aliases(self) -> List[dict]:
+        """Return all pubkey aliases ordered by alias name."""
+        try:
+            with self._connect() as conn:
+                conn.row_factory = sqlite3.Row
+                rows = conn.execute(
+                    "SELECT pubkey, alias, created_at, updated_at FROM pubkey_aliases ORDER BY alias ASC"
+                ).fetchall()
+                return [dict(r) for r in rows]
+        except Exception as e:
+            logger.error(f"Failed to list pubkey aliases: {e}")
+            return []
