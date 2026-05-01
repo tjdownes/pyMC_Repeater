@@ -233,6 +233,12 @@ class RoomServer:
     ) -> bool:
 
         try:
+            # Normalise message text at the point of storage so all code paths
+            # (radio, web UI, companion, CLI) get the same treatment.  Stripping
+            # here rather than only in text.py prevents trailing newlines from web
+            # UI posts being persisted to the database.
+            message_text = message_text.rstrip("\x00�").rstrip()
+
             # SAFETY: Validate message length
             if len(message_text) > MAX_MESSAGE_LENGTH:
                 logger.warning(
