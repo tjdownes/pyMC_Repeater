@@ -5195,6 +5195,71 @@ class APIEndpoints:
             logger.error(f"Error managing pubkey alias: {e}", exc_info=True)
             return self._error(str(e))
 
+    # ------------------------------------------------------------------
+    # GET /api/resolve_pubkey_names?pubkeys=<hex>[,<hex>...]
+    # ------------------------------------------------------------------
+
+    @cherrypy.expose
+    @cherrypy.tools.json_out()
+    def resolve_pubkey_names(self, pubkeys=""):
+        """Batch-resolve display names for a comma-separated list of pubkey hex strings.
+
+        Priority order (highest → lowest):
+          1. pubkey_aliases table (set by admin via POST /api/pubkey_alias)
+          2. adverts table (device broadcast name)
+          3. companion-derived name (derived from companion public key)
+
+        Returns {"success": true, "data": {"<pubkey_hex>": "<name or null>", ...}}
+        """
+        try:
+            storage = self._get_storage()
+            tokens = [t.strip() for t in pubkeys.split(",")]
+            pubkey_list = [t for t in tokens if t]
+
+            result = {}
+            for pk in pubkey_list:
+                name = storage.get_node_name_by_pubkey(pk)
+                if name is None:
+                    name = self._get_companion_name_by_pubkey(pk)
+                result[pk] = name
+
+            return self._success(result)
+
+        except Exception as e:
+            logger.error(f"Error resolving pubkey names: {e}", exc_info=True)
+            return self._error(str(e))
+
+    def _get_companion_name_by_pubkey(self, pubkey_hex: str):
+        """Return a companion-derived display name for *pubkey_hex*, or None.
+
+        Looks up the companion list held by the daemon.  The companion name is
+        only returned when a companion public key can be derived that matches
+        *pubkey_hex*.
+        """
+        try:
+            from repeater.companion.identity_resolve import (
+                derive_companion_public_key_hex,
+                find_companion_index,
+            )
+
+            if not self.daemon_instance:
+                return None
+            handler = getattr(self.daemon_instance, "repeater_handler", None)
+            if handler is None:
+                return None
+            storage = getattr(handler, "storage", None)
+            if storage is None:
+                return None
+            companions = getattr(storage, "companions", None) or []
+            idx = find_companion_index(companions, pubkey_hex)
+            if idx is None:
+                return None
+            companion = companions[idx]
+            name = getattr(companion, "name", None) or getattr(companion, "alias", None)
+            return name or None
+        except Exception:
+            return None
+
     # ======================
     # OpenAPI Documentation
     # ======================
