@@ -626,22 +626,33 @@ class SQLiteHandler:
                             )
                             """
                         )
-                        # Copy only the most-recently-updated row per client.
+                        # Copy the most-recently-updated row per client, but preserve
+                        # the best last_activity value seen across ALL rows for that
+                        # client.  Using MAX(id) alone was wrong: eviction writes a row
+                        # with last_activity=0, and if that row happened to have the
+                        # highest id, the migration would incorrectly preserve the
+                        # evicted state even though earlier rows recorded real activity.
                         conn.execute(
                             """
                             INSERT INTO room_client_sync_new
                                 (room_hash, client_pubkey, sync_since, pending_ack_crc,
                                  push_post_timestamp, ack_timeout_time, push_failures,
                                  last_activity, updated_at)
-                            SELECT room_hash, client_pubkey, sync_since, pending_ack_crc,
-                                   push_post_timestamp, ack_timeout_time, push_failures,
-                                   last_activity, updated_at
-                            FROM room_client_sync
-                            WHERE id IN (
-                                SELECT MAX(id)
+                            SELECT
+                                a.room_hash, a.client_pubkey, a.sync_since, a.pending_ack_crc,
+                                a.push_post_timestamp, a.ack_timeout_time, a.push_failures,
+                                b.best_last_activity AS last_activity,
+                                a.updated_at
+                            FROM room_client_sync a
+                            JOIN (
+                                SELECT room_hash, client_pubkey,
+                                       MAX(id)            AS max_id,
+                                       MAX(last_activity) AS best_last_activity
                                 FROM room_client_sync
                                 GROUP BY room_hash, client_pubkey
-                            )
+                            ) b ON a.room_hash    = b.room_hash
+                               AND a.client_pubkey = b.client_pubkey
+                               AND a.id            = b.max_id
                             """
                         )
                         conn.execute("DROP TABLE room_client_sync")
@@ -695,6 +706,38 @@ class SQLiteHandler:
                         (migration_name, time.time()),
                     )
                     logger.info("Migration 12: Created pubkey_aliases table")
+
+                # Migration 13: Repair room_client_sync rows where last_activity was
+                # incorrectly set to 0 by the flawed migration 11.  Migration 11 used
+                # MAX(id) to pick the canonical row per client, but eviction operations
+                # INSERT a row with last_activity=0 and that row often has the highest
+                # id.  Clients with sync_since > 0 were actively syncing before the
+                # migration, so restore last_activity = sync_since as the best available
+                # estimate of when they were last seen.  Clients with sync_since = 0
+                # were never synced and are left untouched.
+                migration_name = "fix_room_client_sync_last_activity"
+                existing = conn.execute(
+                    "SELECT migration_name FROM migrations WHERE migration_name = ?",
+                    (migration_name,),
+                ).fetchone()
+
+                if not existing:
+                    result = conn.execute(
+                        """
+                        UPDATE room_client_sync
+                        SET last_activity = sync_since
+                        WHERE last_activity = 0.0 AND sync_since > 0
+                        """
+                    )
+                    rows_fixed = result.rowcount
+                    conn.execute(
+                        "INSERT INTO migrations (migration_name, applied_at) VALUES (?, ?)",
+                        (migration_name, time.time()),
+                    )
+                    logger.info(
+                        f"Migration 13: Restored last_activity from sync_since "
+                        f"for {rows_fixed} room_client_sync row(s)"
+                    )
 
                 conn.commit()
 
