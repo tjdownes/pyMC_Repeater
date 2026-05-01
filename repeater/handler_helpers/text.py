@@ -278,8 +278,12 @@ class TextHelper:
         if hasattr(packet, "decrypted") and packet.decrypted:
             message_text = packet.decrypted.get("text", "<unknown>")
 
-            # Clean message text - remove null bytes and trailing whitespace
-            message_text = message_text.rstrip("\x00").rstrip()
+            # Clean message text - remove null bytes, Unicode replacement chars
+            # (U+FFFD / □ appears when the client sends an invalid trailing byte
+            # and pymc_core decodes with errors="replace"), and trailing whitespace.
+            # Normalising here ensures all retransmissions of the same message get
+            # the same text, which is the key the dedup in add_post() compares on.
+            message_text = message_text.rstrip("\x00�").rstrip()
 
             logger.info(f"[{identity_type}:{identity_name}] Message: {message_text}")
 
