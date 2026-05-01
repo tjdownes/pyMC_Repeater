@@ -358,6 +358,12 @@ class TextHelper:
                         logger.info(
                             f"Room '{identity_name}': New post from {sender_pubkey[:4].hex()}: {message_text[:50]}"
                         )
+                    else:
+                        logger.error(
+                            f"Room '{identity_name}': add_post() returned False for message from "
+                            f"{sender_pubkey[:4].hex()} — rate-limited, DB error, or schema mismatch. "
+                            f"Message was NOT stored: {message_text[:80]!r}"
+                        )
 
                 except Exception as e:
                     logger.error(f"Error storing room post: {e}", exc_info=True)
