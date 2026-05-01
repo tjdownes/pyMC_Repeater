@@ -254,27 +254,32 @@ class RoomServer:
                 message_text = message_text[:MAX_MESSAGE_LENGTH]
 
             # SAFETY: Rate limit per client
+            # Server/web-UI authored messages bypass per-client rate limiting
+            # because they are already gate-kept by the web layer and should
+            # never be silently dropped just because the room server's own key
+            # has hit the radio rate-limit window.
             client_key = client_pubkey.hex()
             now = time.time()
 
-            if client_key not in self.client_post_times:
-                self.client_post_times[client_key] = []
+            if not allow_server_author:
+                if client_key not in self.client_post_times:
+                    self.client_post_times[client_key] = []
 
-            # Remove timestamps older than 1 minute
-            self.client_post_times[client_key] = [
-                t for t in self.client_post_times[client_key] if now - t < 60
-            ]
+                # Remove timestamps older than 1 minute
+                self.client_post_times[client_key] = [
+                    t for t in self.client_post_times[client_key] if now - t < 60
+                ]
 
-            # Check rate limit
-            if len(self.client_post_times[client_key]) >= MAX_POSTS_PER_CLIENT_PER_MINUTE:
-                logger.warning(
-                    f"Room '{self.room_name}': Client {client_pubkey[:4].hex()} "
-                    f"exceeded rate limit ({MAX_POSTS_PER_CLIENT_PER_MINUTE} posts/min), dropping message"
-                )
-                return False
+                # Check rate limit
+                if len(self.client_post_times[client_key]) >= MAX_POSTS_PER_CLIENT_PER_MINUTE:
+                    logger.warning(
+                        f"Room '{self.room_name}': Client {client_pubkey[:4].hex()} "
+                        f"exceeded rate limit ({MAX_POSTS_PER_CLIENT_PER_MINUTE} posts/min), dropping message"
+                    )
+                    return False
 
-            # Record this post time
-            self.client_post_times[client_key].append(now)
+                # Record this post time
+                self.client_post_times[client_key].append(now)
 
             # Use our RTC time for post_timestamp
             post_timestamp = time.time()
