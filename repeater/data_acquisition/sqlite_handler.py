@@ -567,6 +567,29 @@ class SQLiteHandler:
                     )
                     logger.info(f"Migration '{migration_name}' applied successfully")
 
+                # Migration 10: Add created_at column to room_messages for old DB schemas.
+                # The column was added to the CREATE TABLE statement but existing databases
+                # that were created before this change will be missing it, causing every
+                # INSERT to fail with "table room_messages has no column named created_at".
+                migration_name = "room_messages_created_at"
+                existing = conn.execute(
+                    "SELECT migration_name FROM migrations WHERE migration_name = ?",
+                    (migration_name,),
+                ).fetchone()
+                if not existing:
+                    cursor = conn.execute("PRAGMA table_info(room_messages)")
+                    room_msg_columns = [col[1] for col in cursor.fetchall()]
+                    if room_msg_columns and "created_at" not in room_msg_columns:
+                        conn.execute(
+                            "ALTER TABLE room_messages ADD COLUMN created_at REAL NOT NULL DEFAULT 0"
+                        )
+                        logger.info("Migration 10: Added created_at column to room_messages")
+                    conn.execute(
+                        "INSERT INTO migrations (migration_name, applied_at) VALUES (?, ?)",
+                        (migration_name, time.time()),
+                    )
+                    logger.info(f"Migration '{migration_name}' applied successfully")
+
                 conn.commit()
 
         except Exception as e:
