@@ -41,32 +41,46 @@ RETRY_BACKOFF_SCHEDULE = [0, 30, 300, 3600]  # 0s, 30s, 5min, 1hr
 
 # Global rate limiter (shared across all rooms)
 _global_push_limiter = None
-_global_push_lock = asyncio.Lock()
-GLOBAL_MIN_GAP_BETWEEN_MESSAGES = 1.1  # 1.1s  minimum gap between transmissions
+GLOBAL_MIN_GAP_BETWEEN_MESSAGES = 1.1  # 1.1s minimum gap between transmissions
 
 
 class GlobalRateLimiter:
+    """Serialise all radio transmissions and enforce a minimum gap between them.
+
+    Usage::
+
+        await limiter.acquire()   # blocks until the radio is free
+        try:
+            await send_packet(...)
+        finally:
+            limiter.release()     # frees the lock for the next caller
+
+    The lock is acquired manually (``await lock.acquire()``) so that it stays
+    held across the ``await send_packet(...)`` call.  Using ``async with`` would
+    release it as soon as ``acquire()`` returned, which is what the previous
+    implementation did — the lock was never actually held during transmission.
+    """
 
     def __init__(self, min_gap_seconds: float = 0.1):
         self.min_gap = min_gap_seconds  # Minimum gap between consecutive messages
         self.lock = asyncio.Lock()  # Only one transmission at a time
-        self.last_release_time = 0
+        self.last_release_time = 0.0
 
     async def acquire(self):
-
-        async with self.lock:
-            # Enforce minimum gap between consecutive transmissions
-            now = time.time()
-            time_since_last = now - self.last_release_time
-            if time_since_last < self.min_gap:
-                wait_time = self.min_gap - time_since_last
-                logger.debug(f"Global rate limiter: waiting {wait_time*1000:.0f}ms")
-                await asyncio.sleep(wait_time)
-            # Lock is now held - caller can transmit
-            # Will be released when context exits
+        # Manually acquire so the lock stays held until release() is called.
+        await self.lock.acquire()
+        # Enforce minimum gap between consecutive transmissions.
+        now = time.time()
+        time_since_last = now - self.last_release_time
+        if time_since_last < self.min_gap:
+            wait_time = self.min_gap - time_since_last
+            logger.debug(f"Global rate limiter: waiting {wait_time*1000:.0f}ms")
+            await asyncio.sleep(wait_time)
+        # Lock is now held — caller must call release() when done.
 
     def release(self):
         self.last_release_time = time.time()
+        self.lock.release()
 
 
 class RoomServer:
